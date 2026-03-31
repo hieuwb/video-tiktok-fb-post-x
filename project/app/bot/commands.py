@@ -32,15 +32,15 @@ Xem nhanh bot dang o che do auto-post hay review thu cong.
 Bat/tat tu dong dang bai len X ngay trong Telegram.
 
 /profiles
-Xem danh sach profile A1-A8, ngon ngu, style va tone.
+Xem danh sach 4 profile ngon ngu: English, Japanese, Korean, Chinese.
 
-/add <url>
-Them link video Facebook, TikTok hoac Instagram de xu ly.
+/add <url> [A1-A4]
+Them link video Facebook, TikTok hoac Instagram de xu ly, co the chon profile ngay trong lenh.
 
 /status <job_id>
 Xem tien do xu ly, caption, profile, subtitle, output va loi neu co.
 
-/profile <job_id> <A1-A8>
+/profile <job_id> <A1-A4>
 Ep job dung profile cu the thay vi profile theo khung gio.
 
 /caption <job_id>
@@ -90,13 +90,22 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if not context.args:
-        await update.message.reply_text("Cach dung: /add <link_facebook_or_tiktok_or_instagram>")
+    parsed = parse_add_arguments(context.args)
+    if not parsed:
+        await update.message.reply_text("Cach dung: /add <link_facebook_or_tiktok_or_instagram> [A1-A4]")
         return
-    url = context.args[0].strip()
+    url, profile_code = parsed
     if not validate_source_url(url):
         await update.message.reply_text("Link khong hop le hoac chua duoc ho tro.")
         return
+
+    target_language = None
+    if profile_code:
+        selector = ProfileSelectorService()
+        if profile_code not in selector.settings.caption_profiles_json:
+            await update.message.reply_text("Profile khong hop le. Hay dung A1-A4.")
+            return
+        target_language = selector.get_profile(profile_code).language
 
     db = SessionLocal()
     try:
@@ -106,9 +115,12 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
             source_platform=detect_platform_from_url(url),
             status="queued",
         )
+        if profile_code and target_language:
+            job = crud.set_job_profile(db, job, profile_code, target_language)
         enqueue_processing_job(job.id)
+        profile_text = f" Profile: {job.selected_profile}." if job.selected_profile else ""
         await update.message.reply_text(
-            f"Da tao job {job.id} cho nen tang {job.source_platform}. Trang thai hien tai: {job.status}"
+            f"Da tao job {job.id} cho nen tang {job.source_platform}. Trang thai hien tai: {job.status}.{profile_text}"
         )
     finally:
         db.close()
@@ -170,7 +182,7 @@ async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def profiles_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     selector = ProfileSelectorService()
-    lines = ["Danh sach profile A1-A8:"]
+    lines = ["Danh sach profile caption hien tai:"]
     for code, payload in selector.settings.caption_profiles_json.items():
         lines.append(
             f"{code}: {payload['language_name']} | style={payload['style']} | tone={payload['tone']}"
@@ -201,7 +213,7 @@ async def autopost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
-        await update.message.reply_text("Cach dung: /profile <job_id> <A1-A8>")
+        await update.message.reply_text("Cach dung: /profile <job_id> <A1-A4>")
         return
     if len(context.args) == 1:
         maybe_job = await _get_job_from_args(update, context)
@@ -221,7 +233,7 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     profile_code = context.args[1].upper().strip()
     selector = ProfileSelectorService()
     if profile_code not in selector.settings.caption_profiles_json:
-        await update.message.reply_text("Profile khong hop le. Hay dung A1-A8.")
+        await update.message.reply_text("Profile khong hop le. Hay dung A1-A4.")
         return
     profile = selector.get_profile(profile_code)
 
@@ -267,6 +279,21 @@ async def caption_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         ]
     )
     await update.message.reply_text(text)
+
+
+def parse_add_arguments(args: list[str]) -> tuple[str, str | None] | None:
+    if not args:
+        return None
+
+    url = args[0].strip()
+    if not url:
+        return None
+
+    profile_code = None
+    if len(args) > 1:
+        profile_code = args[1].strip().upper() or None
+
+    return url, profile_code
 
 
 async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

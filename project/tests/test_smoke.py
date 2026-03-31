@@ -1,6 +1,7 @@
 import unittest
 
 from app.api.routes_jobs import JobCreateRequest, create_job
+from app.bot.commands import parse_add_arguments
 from app.core.security import detect_platform_from_url, validate_source_url
 from app.db import crud
 from app.db.models import Job
@@ -27,6 +28,17 @@ class SmokeTests(unittest.TestCase):
         self.assertTrue(validate_source_url("https://www.tiktok.com/@demo/video/123"))
         self.assertTrue(validate_source_url("https://www.facebook.com/watch/?v=123"))
         self.assertFalse(validate_source_url("https://evil.example/video"))
+
+    def test_add_argument_parsing(self) -> None:
+        self.assertEqual(
+            parse_add_arguments(["https://www.tiktok.com/@demo/video/123", "a4"]),
+            ("https://www.tiktok.com/@demo/video/123", "A4"),
+        )
+        self.assertEqual(
+            parse_add_arguments(["https://www.tiktok.com/@demo/video/123"]),
+            ("https://www.tiktok.com/@demo/video/123", None),
+        )
+        self.assertIsNone(parse_add_arguments([]))
 
     def test_job_create_route(self) -> None:
         response = create_job(

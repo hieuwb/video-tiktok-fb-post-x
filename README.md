@@ -13,7 +13,7 @@ Khi gui mot link video vao Telegram bot, he thong se:
 5. Transcribe noi dung.
 6. Tao subtitle tieng Anh `.srt`.
 7. Burn subtitle vao video neu bat tinh nang nay.
-8. Rewrite caption bang AI theo profile `A1-A8`.
+8. Rewrite caption bang AI theo 4 profile ngon ngu: English, Japanese, Korean, Chinese.
 9. Gui preview ve Telegram.
 10. Dang len X sau khi duyet hoac tu dong dang neu bat auto-post.
 
@@ -170,9 +170,9 @@ Mo Telegram va chat voi bot cua ban.
 - `/profiles`
 - `/autopost on`
 - `/autopost off`
-- `/add <url>`
+- `/add <url> [A1-A4]`
 - `/status <job_id>`
-- `/profile <job_id> <A1-A8>`
+- `/profile <job_id> <A1-A4>`
 - `/caption <job_id>`
 - `/sub <job_id>`
 - `/retry <job_id>`
@@ -218,7 +218,7 @@ Xem nhanh bot dang o:
 
 ### `/profiles`
 
-Liet ke danh sach `A1-A8`, bao gom:
+Liet ke danh sach `A1-A4`, bao gom:
 
 - ngon ngu
 - style
@@ -237,12 +237,13 @@ Bat hoac tat che do tu dong dang ngay trong Telegram.
 /autopost off
 ```
 
-### `/add <url>`
+### `/add <url> [A1-A4]`
 
 Gui link video de tao job moi.
 
 ```text
 /add https://www.tiktok.com/...
+/add https://www.tiktok.com/... A2
 /add https://www.facebook.com/...
 /add https://www.instagram.com/...
 ```
@@ -255,12 +256,12 @@ Xem tien do xu ly cua job.
 /status 12
 ```
 
-### `/profile <job_id> <A1-A8>`
+### `/profile <job_id> <A1-A4>`
 
 Ep job dung profile cu the thay vi profile theo gio.
 
 ```text
-/profile 12 A5
+/profile 12 A4
 ```
 
 ### `/caption <job_id>`
@@ -317,6 +318,7 @@ Tu choi job, khong dang bai.
 
 ```text
 /add <url>
+/add <url> A3
 ```
 
 3. Theo doi job:
@@ -349,22 +351,19 @@ Tu choi job, khong dang bai.
 
 ```text
 /add <url>
+/add <url> A1
 ```
 
 3. Bot se tu xu ly va tu dang len X sau khi caption xong.
 
-## 6. Profile A1 - A8
+## 6. Profile A1 - A4
 
-Mac dinh he thong co 8 profile:
+Mac dinh he thong co 4 profile:
 
-- `A1`: English, clean, safe
-- `A2`: English, engaging
-- `A3`: Japanese
-- `A4`: Korean
-- `A5`: Arabic
-- `A6`: Spanish
-- `A7`: Latin
-- `A8`: English, factual
+- `A1`: English
+- `A2`: Japanese
+- `A3`: Korean
+- `A4`: Chinese
 
 Profile theo gio duoc dieu khien boi:
 

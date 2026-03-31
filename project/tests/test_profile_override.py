@@ -26,10 +26,10 @@ class ProfileOverrideTests(unittest.TestCase):
             source_platform="tiktok",
             status="queued",
         )
-        profile = ProfileSelectorService().get_profile("A5")
+        profile = ProfileSelectorService().get_profile("A4")
         updated = crud.set_job_profile(self.db, job, profile.code, profile.language)
-        self.assertEqual(updated.selected_profile, "A5")
-        self.assertEqual(updated.target_language, "ar")
+        self.assertEqual(updated.selected_profile, "A4")
+        self.assertEqual(updated.target_language, "zh")
 
 
 if __name__ == "__main__":

@@ -132,20 +132,16 @@ def get_settings() -> Settings:
 def default_caption_profiles() -> dict[str, dict[str, Any]]:
     return {
         "A1": {"language": "en", "language_name": "English", "style": "public_clean", "tone": "clean, safe, concise"},
-        "A2": {"language": "en", "language_name": "English", "style": "more_engaging", "tone": "energetic, short, viral-safe"},
-        "A3": {"language": "ja", "language_name": "Japanese", "style": "public_clean", "tone": "polite, concise"},
-        "A4": {"language": "ko", "language_name": "Korean", "style": "more_engaging", "tone": "trendy, natural"},
-        "A5": {"language": "ar", "language_name": "Arabic", "style": "public_clean", "tone": "clear, modern, safe"},
-        "A6": {"language": "es", "language_name": "Spanish", "style": "more_engaging", "tone": "casual, social"},
-        "A7": {"language": "la", "language_name": "Latin", "style": "neutral", "tone": "formal, compact"},
-        "A8": {"language": "en", "language_name": "English", "style": "neutral", "tone": "newsy, factual"},
+        "A2": {"language": "ja", "language_name": "Japanese", "style": "public_clean", "tone": "polite, concise"},
+        "A3": {"language": "ko", "language_name": "Korean", "style": "public_clean", "tone": "natural, concise, social-safe"},
+        "A4": {"language": "zh", "language_name": "Chinese", "style": "public_clean", "tone": "clear, concise, public-safe"},
     }
 
 
 def default_profile_hourly_map() -> list[str]:
     return [
         "A1", "A1", "A1", "A1", "A2", "A2",
-        "A3", "A3", "A4", "A4", "A5", "A5",
-        "A6", "A6", "A7", "A7", "A8", "A8",
-        "A1", "A2", "A3", "A4", "A5", "A6",
+        "A2", "A2", "A3", "A3", "A3", "A3",
+        "A4", "A4", "A4", "A4", "A1", "A1",
+        "A1", "A2", "A2", "A3", "A4", "A4",
     ]
