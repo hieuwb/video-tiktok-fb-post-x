@@ -1,0 +1,53 @@
+# Secrets and local env
+.env
+.env.*
+!.env.example
+project/.env
+project/.env.*
+!project/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+env/
+project/.venv/
+
+# Runtime storage and local data
+storage/
+project/storage/
+*.db
+*.sqlite
+*.sqlite3
+
+# Coverage and test artifacts
+.coverage
+.coverage.*
+htmlcov/
+
+# OS / editor files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+
+# Docker local overrides
+docker-compose.override.yml
+

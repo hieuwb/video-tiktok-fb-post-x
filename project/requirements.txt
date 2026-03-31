@@ -1,0 +1,16 @@
+--extra-index-url https://download.pytorch.org/whl/cpu
+celery==5.4.0
+deep-translator==1.11.4
+fastapi==0.116.1
+openai-whisper==20250625
+pydantic==2.11.7
+pydantic-settings==2.10.1
+python-multipart==0.0.20
+python-telegram-bot==22.3
+redis==6.2.0
+requests==2.32.4
+SQLAlchemy==2.0.43
+torch==2.11.0+cpu; platform_system == "Linux"
+tweepy==4.16.0
+uvicorn[standard]==0.35.0
+yt-dlp==2025.9.5

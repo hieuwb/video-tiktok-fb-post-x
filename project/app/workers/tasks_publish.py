@@ -1,0 +1,37 @@
+import logging
+
+from app.db import crud
+from app.db.session import SessionLocal
+from app.services.telegram_notifier import TelegramNotifier
+from app.services.x_publisher import XPublisherService
+from app.workers.celery_app import celery_app, dispatch_task
+
+
+logger = logging.getLogger(__name__)
+
+
+def enqueue_publish_job(job_id: int) -> None:
+    if not dispatch_task("app.workers.tasks_publish.process_publish", job_id):
+        logger.warning("Celery broker unavailable. Publish job %s was not queued.", job_id)
+
+
+@celery_app.task(name="app.workers.tasks_publish.process_publish")
+def process_publish(job_id: int) -> None:
+    db = SessionLocal()
+    notifier = TelegramNotifier()
+    try:
+        job = crud.get_job(db, job_id)
+        if not job:
+            return
+        crud.update_job(db, job, status="publishing")
+        publisher = XPublisherService()
+        result = publisher.publish(job)
+        crud.mark_job_posted(db, job, result["post_id"], result["post_url"])
+        notifier.notify_publish_success(job.id)
+    except Exception as exc:
+        logger.exception("Publish failed for job %s", job_id)
+        if "job" in locals() and job:
+            crud.update_job(db, job, status="failed_publish", error_message=str(exc))
+            notifier.notify_failure(job.id, str(exc))
+    finally:
+        db.close()
