@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import Mock, patch
 
 from app.api.routes_jobs import JobCreateRequest, create_job
 from app.bot.commands import parse_add_arguments
@@ -7,6 +8,7 @@ from app.db import crud
 from app.db.models import Job
 from app.db.session import SessionLocal, init_db
 from app.services.caption_rewriter import CaptionRewriterService
+from app.services.downloader import DownloaderService
 from app.services.profile_selector import ProfileSelectorService
 from app.services.subtitle_generator import SubtitleGeneratorService
 
@@ -80,6 +82,22 @@ class SmokeTests(unittest.TestCase):
 
         self.assertTrue(Path(srt_path).exists())
 
+    def test_caption_fallback_removes_old_hashtags(self) -> None:
+        job = crud.create_job(
+            self.db,
+            source_url="https://www.tiktok.com/@demo/video/123",
+            source_platform="tiktok",
+            status="queued",
+        )
+        job = crud.update_job(
+            self.db,
+            job,
+            source_caption="Awesome badminton skills. #thegioicaulong #caulongvietnam #xuhuong",
+        )
+        profile = ProfileSelectorService().get_profile("A1")
+        package = CaptionRewriterService().generate_caption_package(job, profile)
+        self.assertEqual(package["captions"]["public_clean"], "Awesome badminton skills")
+
     def test_caption_sanitizes_only_sensitive_words(self) -> None:
         job = crud.create_job(
             self.db,
@@ -96,6 +114,38 @@ class SmokeTests(unittest.TestCase):
         package = CaptionRewriterService().generate_caption_package(job, profile)
         self.assertIn("s**t", package["captions"]["public_clean"])
         self.assertIn("contact info removed", package["captions"]["public_clean"])
+
+    def test_downloader_selects_matching_entry_by_source_url(self) -> None:
+        service = DownloaderService()
+        info = {
+            "entries": [
+                {"webpage_url": "https://www.tiktok.com/@other/video/999", "title": "Wrong"},
+                {"webpage_url": "https://www.tiktok.com/@demo/video/123?foo=1", "title": "Correct"},
+            ]
+        }
+        selected = service._select_primary_info(
+            info,
+            "https://www.tiktok.com/@demo/video/123?foo=1&utm_source=telegram",
+        )
+        self.assertEqual(selected["title"], "Correct")
+
+    def test_downloader_resolves_downloaded_filepath(self) -> None:
+        service = DownloaderService()
+        resolved = service._resolve_downloaded_file_path(
+            {"requested_downloads": [{"filepath": "/tmp/final.mp4"}]},
+            None,  # type: ignore[arg-type]
+        )
+        self.assertEqual(resolved, "/tmp/final.mp4")
+
+    @patch("app.services.downloader.requests.get")
+    def test_downloader_resolves_short_source_url(self, mock_get: Mock) -> None:
+        mock_response = Mock()
+        mock_response.url = "https://www.tiktok.com/@demo/video/1234567890"
+        mock_get.return_value = mock_response
+
+        service = DownloaderService()
+        resolved = service._resolve_source_url("https://vt.tiktok.com/ZSHFWVCCe/")
+        self.assertEqual(resolved, "https://www.tiktok.com/@demo/video/1234567890")
 
 
 if __name__ == "__main__":

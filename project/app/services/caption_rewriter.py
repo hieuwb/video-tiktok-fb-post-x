@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 import requests
@@ -166,7 +167,8 @@ class CaptionRewriterService:
         return text
 
     def _sanitize_caption_text(self, text: str) -> str:
-        value = " ".join(text.split()).strip()
+        value = self._strip_hashtags(text)
+        value = " ".join(value.split()).strip()
         replacements = {
             "fuck": "f*ck",
             "shit": "s**t",
@@ -185,3 +187,7 @@ class CaptionRewriterService:
                 value = value.replace(source.title(), target)
                 value = value.replace(source.upper(), target.upper())
         return value[:260]
+
+    def _strip_hashtags(self, text: str) -> str:
+        value = re.sub(r"(?<!\w)#[^\s#]+", " ", text)
+        return re.sub(r"\s+", " ", value).strip(" ,.-")
