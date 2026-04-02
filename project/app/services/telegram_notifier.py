@@ -57,7 +57,6 @@ class TelegramNotifier:
                 f"Language: {job.target_language or '-'}",
                 f"Caption: {job.selected_caption or '-'}",
                 f"Hashtags: {job.hashtags or '-'}",
-                f"Subtitle: {job.subtitle_srt_path or '-'}",
                 f"Output: {job.output_video_path or job.raw_video_path or '-'}",
                 f"Error: {job.error_message or '-'}",
             ]
@@ -81,8 +80,6 @@ class TelegramNotifier:
                 ]
             )
             self.send_message(message)
-            if job.subtitle_srt_path and Path(job.subtitle_srt_path).exists():
-                self.send_document(job.subtitle_srt_path)
             preview_path = job.output_video_path or job.raw_video_path
             if preview_path and Path(preview_path).exists():
                 self.send_video(preview_path, caption=f"Preview job {job.id}")

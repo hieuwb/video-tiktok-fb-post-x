@@ -38,7 +38,7 @@ Xem danh sach 4 profile ngon ngu: English, Japanese, Korean, Chinese.
 Them link video Facebook, TikTok hoac Instagram de xu ly, co the chon profile ngay trong lenh.
 
 /status <job_id>
-Xem tien do xu ly, caption, profile, subtitle, output va loi neu co.
+Xem tien do xu ly, caption, profile, output va loi neu co.
 
 /profile <job_id> <A1-A4>
 Ep job dung profile cu the thay vi profile theo khung gio.
@@ -47,7 +47,7 @@ Ep job dung profile cu the thay vi profile theo khung gio.
 Xem nhanh caption da tao cho job.
 
 /sub <job_id>
-Tai file subtitle .srt cua job.
+Thong bao rang subtitle da duoc tat.
 
 /retry <job_id>
 Chay lai job neu job dang fail hoac can xu ly lai.
@@ -78,14 +78,15 @@ async def platforms_command(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     runtime = RuntimeSettingsService()
     autopost = runtime.get_auto_post_enabled()
-    mode = "auto-post" if autopost else "review"
+    require_approval = runtime.get_require_approval_before_post()
+    mode = "auto-post" if autopost and not require_approval else "review"
     detail = (
         "Bot se tu dang len X sau khi caption xong."
-        if autopost
+        if autopost and not require_approval
         else "Bot se dung o awaiting_review va cho /approve."
     )
     await update.message.reply_text(
-        f"Che do hien tai: {mode}\nAuto-post: {'on' if autopost else 'off'}\n{detail}"
+        f"Che do hien tai: {mode}\nAuto-post: {'on' if autopost else 'off'}\nRequire approval: {'on' if require_approval else 'off'}\n{detail}"
     )
 
 
@@ -205,9 +206,9 @@ async def autopost_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     enabled = desired == "on"
-    runtime.set_auto_post_enabled(enabled)
+    runtime.set_post_mode(enabled)
     await update.message.reply_text(
-        f"Da chuyen auto-post sang {'on' if enabled else 'off'}."
+        f"Da chuyen auto-post sang {'on' if enabled else 'off'}. Require approval hien dang {'off' if enabled else 'on'}."
     )
 
 
@@ -297,14 +298,7 @@ def parse_add_arguments(args: list[str]) -> tuple[str, str | None] | None:
 
 
 async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    job = await _get_job_from_args(update, context)
-    if not job:
-        return
-    if not job.subtitle_srt_path:
-        await update.message.reply_text("Chua co file subtitle.")
-        return
-    with open(job.subtitle_srt_path, "rb") as handle:
-        await update.message.reply_document(document=handle, filename=f"job-{job.id}.srt")
+    await update.message.reply_text("Subtitle da duoc tat trong pipeline hien tai.")
 
 
 async def recaption_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

@@ -26,6 +26,7 @@ Khi gui mot link video vao Telegram bot, he thong se:
 Luu y:
 - Instagram la nguon `best effort`
 - mot so link Instagram co the fail do can dang nhap, cookie, hoac bi rate-limit
+- neu Instagram/Facebook bi chan, ban co the them cookie session vao `.env`
 
 ## Cong nghe su dung
 
@@ -102,6 +103,16 @@ Mo file [`.env`](/root/video-x-bot/project/.env) va dien cac bien toi thieu:
 - `X_ACCESS_TOKEN`
 - `X_ACCESS_TOKEN_SECRET`
 - `X_BEARER_TOKEN`
+
+Neu Instagram hoac Facebook yeu cau session, co the bo sung:
+
+- `INSTAGRAM_COOKIE_HEADER`
+- `FACEBOOK_COOKIE_HEADER`
+
+Khuyen nghi:
+- chi dat cookie trong file `.env`
+- khong hardcode cookie vao code
+- rotate session neu cookie da tung bi chia se
 
 ### Buoc 4: chon che do dang bai
 

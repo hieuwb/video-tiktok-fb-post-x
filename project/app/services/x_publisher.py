@@ -6,6 +6,7 @@ import tweepy
 
 from app.core.config import get_settings
 from app.db.models import Job
+from app.services.runtime_settings import RuntimeSettingsService
 
 
 class XPublisherService:
@@ -29,7 +30,8 @@ class XPublisherService:
         )
 
     def publish(self, job: Job) -> dict[str, str]:
-        if self.settings.require_approval_before_post and job.status != "publishing":
+        require_approval = RuntimeSettingsService().get_require_approval_before_post()
+        if require_approval and job.status != "publishing":
             raise ValueError("Job is not approved for publishing.")
         media_source = job.output_video_path or job.raw_video_path
         if not media_source or not Path(media_source).exists():

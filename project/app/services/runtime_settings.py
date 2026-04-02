@@ -32,3 +32,20 @@ class RuntimeSettingsService:
         payload = self.load()
         payload["enable_auto_post"] = enabled
         self.save(payload)
+
+    def get_require_approval_before_post(self) -> bool:
+        payload = self.load()
+        if "require_approval_before_post" in payload:
+            return bool(payload["require_approval_before_post"])
+        return self.settings.require_approval_before_post
+
+    def set_require_approval_before_post(self, enabled: bool) -> None:
+        payload = self.load()
+        payload["require_approval_before_post"] = enabled
+        self.save(payload)
+
+    def set_post_mode(self, autopost_enabled: bool) -> None:
+        payload = self.load()
+        payload["enable_auto_post"] = autopost_enabled
+        payload["require_approval_before_post"] = not autopost_enabled
+        self.save(payload)

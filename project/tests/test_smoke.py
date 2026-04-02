@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 from unittest.mock import Mock, patch
 
 from app.api.routes_jobs import JobCreateRequest, create_job
@@ -10,7 +11,6 @@ from app.db.session import SessionLocal, init_db
 from app.services.caption_rewriter import CaptionRewriterService
 from app.services.downloader import DownloaderService
 from app.services.profile_selector import ProfileSelectorService
-from app.services.subtitle_generator import SubtitleGeneratorService
 
 
 class SmokeTests(unittest.TestCase):
@@ -50,7 +50,7 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(response.source_platform, "tiktok")
         self.assertEqual(response.status, "queued")
 
-    def test_caption_fallback_and_subtitle_generation(self) -> None:
+    def test_caption_fallback_generation(self) -> None:
         job = crud.create_job(
             self.db,
             source_url="https://www.tiktok.com/@demo/video/123",
@@ -70,17 +70,6 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("public_clean", package["captions"])
         self.assertTrue(package["captions"]["public_clean"])
         self.assertEqual(package["captions"]["public_clean"], "Sample caption")
-
-        srt_path = SubtitleGeneratorService().generate_srt(
-            job.id,
-            {
-                "text_en": "hello world",
-                "segments": [{"start": 0.0, "end": 1.5, "text": "hello world"}],
-            },
-        )
-        from pathlib import Path
-
-        self.assertTrue(Path(srt_path).exists())
 
     def test_caption_fallback_removes_old_hashtags(self) -> None:
         job = crud.create_job(
@@ -115,6 +104,26 @@ class SmokeTests(unittest.TestCase):
         self.assertIn("s**t", package["captions"]["public_clean"])
         self.assertIn("contact info removed", package["captions"]["public_clean"])
 
+    def test_sanitize_removes_hashtags_from_ai_caption_output(self) -> None:
+        profile = ProfileSelectorService().get_profile("A1")
+        service = CaptionRewriterService()
+        package = service._sanitize(
+            {
+                "summary": "demo",
+                "risk_flags": [],
+                "captions": {
+                    "neutral": "Nice clip #tag1",
+                    "public_clean": "Great rally #badminton #sports",
+                    "more_engaging": "#viral Amazing play",
+                },
+                "hashtags": ["#badminton", "#sports"],
+            },
+            profile,
+        )
+        self.assertEqual(package["captions"]["neutral"], "Nice clip")
+        self.assertEqual(package["captions"]["public_clean"], "Great rally")
+        self.assertEqual(package["captions"]["more_engaging"], "Amazing play")
+
     def test_downloader_selects_matching_entry_by_source_url(self) -> None:
         service = DownloaderService()
         info = {
@@ -136,6 +145,34 @@ class SmokeTests(unittest.TestCase):
             None,  # type: ignore[arg-type]
         )
         self.assertEqual(resolved, "/tmp/final.mp4")
+
+    def test_downloader_builds_instagram_headers_with_cookie(self) -> None:
+        service = DownloaderService()
+        service.settings.instagram_cookie_header = "csrftoken=demo; sessionid=demo"
+        headers = service._build_request_headers("instagram")
+        self.assertEqual(headers["Referer"], "https://www.instagram.com/")
+        self.assertIn("Cookie", headers)
+
+    def test_downloader_builds_facebook_headers_with_cookie(self) -> None:
+        service = DownloaderService()
+        service.settings.facebook_cookie_header = "c_user=1; xs=demo"
+        headers = service._build_request_headers("facebook")
+        self.assertEqual(headers["Referer"], "https://www.facebook.com/")
+        self.assertIn("Cookie", headers)
+
+    def test_downloader_builds_cookie_file_from_header(self) -> None:
+        service = DownloaderService()
+        service.settings.instagram_cookie_header = "csrftoken=demo; sessionid=abc123"
+        cookie_file = service._build_cookie_file_from_header(
+            "instagram",
+            "https://www.instagram.com/reel/demo/",
+        )
+        self.assertIsNotNone(cookie_file)
+        self.assertTrue(Path(cookie_file).exists())
+        content = Path(cookie_file).read_text(encoding="utf-8")
+        self.assertIn("csrftoken", content)
+        self.assertIn("sessionid", content)
+        Path(cookie_file).unlink(missing_ok=True)
 
     @patch("app.services.downloader.requests.get")
     def test_downloader_resolves_short_source_url(self, mock_get: Mock) -> None:

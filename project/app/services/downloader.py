@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.parse import parse_qsl, urlparse
@@ -8,7 +9,7 @@ import requests
 from yt_dlp import DownloadError, YoutubeDL
 
 from app.core.config import Settings, get_settings
-from app.core.security import enforce_download_limits
+from app.core.security import detect_platform_from_url, enforce_download_limits
 
 
 @dataclass
@@ -23,9 +24,12 @@ class DownloaderService:
         self.settings = settings or get_settings()
 
     def download(self, job_id: int, url: str) -> DownloadResult:
+        platform = detect_platform_from_url(url)
         resolved_url = self._resolve_source_url(url)
         self._cleanup_existing_artifacts(job_id)
         output_template = str(Path(self.settings.raw_video_dir) / f"{job_id}.%(ext)s")
+        request_headers = self._build_request_headers(platform)
+        generated_cookie_file = self._build_cookie_file_from_header(platform, resolved_url)
         opts = {
             "outtmpl": output_template,
             "format": "mp4/bestvideo+bestaudio/best",
@@ -33,15 +37,11 @@ class DownloaderService:
             "noplaylist": True,
             "quiet": True,
             "socket_timeout": self.settings.download_timeout_seconds,
-            "http_headers": {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/133.0.0.0 Safari/537.36"
-                )
-            },
+            "http_headers": request_headers,
         }
-        if self.settings.ytdlp_cookie_file:
+        if generated_cookie_file:
+            opts["cookiefile"] = generated_cookie_file
+        elif self.settings.ytdlp_cookie_file:
             opts["cookiefile"] = self.settings.ytdlp_cookie_file
         elif self.settings.ytdlp_cookies_from_browser:
             browser_spec = self.settings.ytdlp_cookies_from_browser
@@ -61,6 +61,9 @@ class DownloaderService:
                 filename = self._resolve_downloaded_file_path(selected_info, ydl)
             except DownloadError as exc:
                 raise ValueError(self._friendly_error(resolved_url, str(exc))) from exc
+            finally:
+                if generated_cookie_file:
+                    Path(generated_cookie_file).unlink(missing_ok=True)
 
         final_path = Path(filename)
         if final_path.suffix != ".mp4":
@@ -75,18 +78,13 @@ class DownloaderService:
         )
 
     def _resolve_source_url(self, url: str) -> str:
+        platform = detect_platform_from_url(url)
         try:
             response = requests.get(
                 url,
                 allow_redirects=True,
                 timeout=min(self.settings.download_timeout_seconds, 20),
-                headers={
-                    "User-Agent": (
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                        "AppleWebKit/537.36 (KHTML, like Gecko) "
-                        "Chrome/133.0.0.0 Safari/537.36"
-                    )
-                },
+                headers=self._build_request_headers(platform),
             )
             response.close()
             if response.url:
@@ -107,6 +105,79 @@ class DownloaderService:
             for candidate in path.glob(f"{job_id}*"):
                 if candidate.is_file():
                     candidate.unlink(missing_ok=True)
+
+    def _build_request_headers(self, platform: str) -> dict[str, str]:
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/133.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        }
+
+        if platform == "instagram":
+            headers["Referer"] = "https://www.instagram.com/"
+            if self.settings.instagram_cookie_header:
+                headers["Cookie"] = self.settings.instagram_cookie_header
+        elif platform == "facebook":
+            headers["Referer"] = "https://www.facebook.com/"
+            if self.settings.facebook_cookie_header:
+                headers["Cookie"] = self.settings.facebook_cookie_header
+
+        return headers
+
+    def _build_cookie_file_from_header(self, platform: str, source_url: str) -> str | None:
+        cookie_header = ""
+        if platform == "instagram":
+            cookie_header = self.settings.instagram_cookie_header
+        elif platform == "facebook":
+            cookie_header = self.settings.facebook_cookie_header
+
+        if not cookie_header:
+            return None
+
+        domain = urlparse(source_url).hostname or ""
+        if not domain:
+            return None
+
+        cookie_lines = ["# Netscape HTTP Cookie File"]
+        for fragment in cookie_header.split(";"):
+            if "=" not in fragment:
+                continue
+            name, value = fragment.split("=", 1)
+            name = name.strip()
+            value = value.strip()
+            if not name:
+                continue
+            cookie_lines.append(
+                "\t".join(
+                    [
+                        domain,
+                        "TRUE",
+                        "/",
+                        "FALSE",
+                        "0",
+                        name,
+                        value,
+                    ]
+                )
+            )
+
+        if len(cookie_lines) == 1:
+            return None
+
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            suffix=".cookies.txt",
+            prefix=f"{platform}_",
+            dir=self.settings.storage_root,
+            delete=False,
+            encoding="utf-8",
+        ) as handle:
+            handle.write("\n".join(cookie_lines))
+            handle.write("\n")
+            return handle.name
 
     def _select_primary_info(self, info: dict, source_url: str) -> dict:
         entries = [entry for entry in info.get("entries", []) if entry]
@@ -155,6 +226,7 @@ class DownloaderService:
         ):
             return (
                 "Instagram link nay yeu cau dang nhap hoac dang bi gioi han. "
-                "Ban co the bo qua nguon nay, thu link khac, hoac cau hinh cookie neu muon tai Instagram on dinh hon."
+                "Hay kiem tra lai INSTAGRAM_COOKIE_HEADER trong .env, uu tien cookie co sessionid hop le, "
+                "hoac thu link khac neu bai nay bi chan."
             )
         return raw_error

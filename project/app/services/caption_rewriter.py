@@ -147,7 +147,8 @@ class CaptionRewriterService:
         }
 
     def _ensure_caption(self, text: str, profile: CaptionProfile) -> str:
-        value = " ".join(str(text).split()).strip()
+        value = self._strip_hashtags(str(text))
+        value = " ".join(value.split()).strip()
         if not value:
             value = self._localize_fallback("Video update", profile)
         return value[:260]

@@ -52,6 +52,8 @@ class Settings(BaseSettings):
     ytdlp_cookie_file: str = Field(default="", alias="YTDLP_COOKIE_FILE")
     ytdlp_cookies_from_browser: str = Field(default="", alias="YTDLP_COOKIES_FROM_BROWSER")
     ytdlp_browser_profile: str = Field(default="", alias="YTDLP_BROWSER_PROFILE")
+    instagram_cookie_header: str = Field(default="", alias="INSTAGRAM_COOKIE_HEADER")
+    facebook_cookie_header: str = Field(default="", alias="FACEBOOK_COOKIE_HEADER")
 
     max_video_duration_seconds: int = Field(default=300, alias="MAX_VIDEO_DURATION_SECONDS")
     max_video_file_size_mb: int = Field(default=200, alias="MAX_VIDEO_FILE_SIZE_MB")

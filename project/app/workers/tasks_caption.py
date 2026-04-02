@@ -26,7 +26,6 @@ def retry_caption_generation(job_id: int) -> None:
 
 @celery_app.task(name="app.workers.tasks_caption.process_caption")
 def process_caption(job_id: int) -> None:
-    settings = get_settings()
     runtime = RuntimeSettingsService()
     db = SessionLocal()
     notifier = TelegramNotifier()
@@ -44,7 +43,7 @@ def process_caption(job_id: int) -> None:
         )
         package = service.generate_caption_package(job, profile)
         next_status = "awaiting_review"
-        if runtime.get_auto_post_enabled() and not settings.require_approval_before_post:
+        if runtime.get_auto_post_enabled() and not runtime.get_require_approval_before_post():
             next_status = "approved"
         crud.update_job(
             db,
