@@ -221,6 +221,11 @@ class DownloaderService:
 
     def _friendly_error(self, url: str, raw_error: str) -> str:
         lowered = raw_error.lower()
+        if "tiktok" in url.lower() and "unable to extract webpage video data" in lowered:
+            return (
+                "TikTok dang doi extractor cua yt-dlp. "
+                "Hay rebuild image de cap nhat yt-dlp roi thu lai job nay."
+            )
         if "instagram" in url.lower() and (
             "login required" in lowered or "requested content is not available" in lowered
         ):

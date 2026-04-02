@@ -6,12 +6,15 @@ class TranslatorService:
         self.settings = get_settings()
 
     def translate_to_english(self, text: str) -> str:
-        if not self.settings.enable_auto_translate_to_en or not text.strip():
+        return self.translate_text(text, "en")
+
+    def translate_text(self, text: str, target_language: str) -> str:
+        if not text.strip():
             return text
         try:
             from deep_translator import GoogleTranslator
 
-            return GoogleTranslator(source="auto", target="en").translate(text)
+            return GoogleTranslator(source="auto", target=self._normalize_target_language(target_language)).translate(text)
         except Exception:
             return text
 
@@ -25,3 +28,9 @@ class TranslatorService:
                 }
             )
         return translated
+
+    def _normalize_target_language(self, language: str) -> str:
+        mapping = {
+            "zh": "zh-CN",
+        }
+        return mapping.get(language, language)

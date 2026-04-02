@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
+
 from telegram import Update
 from telegram.ext import ContextTypes
 
 from app.core.security import detect_platform_from_url, validate_source_url
+from app.core.utils import ensure_utc_datetime
 from app.db import crud
 from app.db.session import SessionLocal
 from app.services.profile_selector import ProfileSelectorService
@@ -34,8 +38,8 @@ Bat/tat tu dong dang bai len X ngay trong Telegram.
 /profiles
 Xem danh sach 4 profile ngon ngu: English, Japanese, Korean, Chinese.
 
-/add <url> [A1-A4]
-Them link video Facebook, TikTok hoac Instagram de xu ly, co the chon profile ngay trong lenh.
+/add <url> [A1-A4] [YYYY-MM-DD HH:MM]
+Them link video Facebook, TikTok hoac Instagram de xu ly, co the chon profile va lich dang theo gio Viet Nam ngay trong lenh.
 
 /status <job_id>
 Xem tien do xu ly, caption, profile, output va loi neu co.
@@ -45,6 +49,9 @@ Ep job dung profile cu the thay vi profile theo khung gio.
 
 /caption <job_id>
 Xem nhanh caption da tao cho job.
+
+/schedule <job_id> YYYY-MM-DD HH:MM
+Dat lich dang bai theo gio Viet Nam (ICT, UTC+7).
 
 /sub <job_id>
 Thong bao rang subtitle da duoc tat.
@@ -93,9 +100,9 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     parsed = parse_add_arguments(context.args)
     if not parsed:
-        await update.message.reply_text("Cach dung: /add <link_facebook_or_tiktok_or_instagram> [A1-A4]")
+        await update.message.reply_text("Cach dung: /add <link_facebook_or_tiktok_or_instagram> [A1-A4] [YYYY-MM-DD HH:MM]")
         return
-    url, profile_code = parsed
+    url, profile_code, scheduled_utc = parsed
     if not validate_source_url(url):
         await update.message.reply_text("Link khong hop le hoac chua duoc ho tro.")
         return
@@ -118,10 +125,15 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
         )
         if profile_code and target_language:
             job = crud.set_job_profile(db, job, profile_code, target_language)
+        if scheduled_utc:
+            job = crud.set_job_schedule(db, job, scheduled_utc)
         enqueue_processing_job(job.id)
         profile_text = f" Profile: {job.selected_profile}." if job.selected_profile else ""
+        schedule_text = ""
+        if scheduled_utc:
+            schedule_text = f" Schedule: {scheduled_utc.astimezone(ZoneInfo('Asia/Ho_Chi_Minh')).strftime('%Y-%m-%d %H:%M ICT')}."
         await update.message.reply_text(
-            f"Da tao job {job.id} cho nen tang {job.source_platform}. Trang thai hien tai: {job.status}.{profile_text}"
+            f"Da tao job {job.id} cho nen tang {job.source_platform}. Trang thai hien tai: {job.status}.{profile_text}{schedule_text}"
         )
     finally:
         db.close()
@@ -150,9 +162,16 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 f"Job {refreshed.id} dang o trang thai {refreshed.status}, khong phai awaiting_review."
             )
             return
-        crud.mark_job_approved(db, refreshed)
-        enqueue_publish_job(refreshed.id)
-        await update.message.reply_text(f"Da duyet job {refreshed.id} va dua vao hang doi publish.")
+        refreshed = crud.mark_job_approved(db, refreshed)
+        enqueue_publish_job(refreshed.id, eta=refreshed.scheduled_publish_at)
+        message = f"Da duyet job {refreshed.id}"
+        scheduled_publish_at = ensure_utc_datetime(refreshed.scheduled_publish_at)
+        if scheduled_publish_at:
+            schedule_vn = scheduled_publish_at.astimezone(ZoneInfo("Asia/Ho_Chi_Minh")).strftime("%Y-%m-%d %H:%M ICT")
+            message += f" va len lich publish luc {schedule_vn}."
+        else:
+            message += " va dua vao hang doi publish."
+        await update.message.reply_text(message)
     finally:
         db.close()
 
@@ -282,7 +301,48 @@ async def caption_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await update.message.reply_text(text)
 
 
-def parse_add_arguments(args: list[str]) -> tuple[str, str | None] | None:
+async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if len(context.args) < 3:
+        await update.message.reply_text("Cach dung: /schedule <job_id> YYYY-MM-DD HH:MM")
+        return
+
+    try:
+        job_id = int(context.args[0])
+    except ValueError:
+        await update.message.reply_text("job_id phai la so nguyen.")
+        return
+
+    datetime_text = f"{context.args[1].strip()} {context.args[2].strip()}"
+    try:
+        vietnam_tz = ZoneInfo("Asia/Ho_Chi_Minh")
+        scheduled_vn = datetime.strptime(datetime_text, "%Y-%m-%d %H:%M").replace(tzinfo=vietnam_tz)
+        scheduled_utc = scheduled_vn.astimezone(timezone.utc)
+    except ValueError:
+        await update.message.reply_text("Sai dinh dang. Vi du: /schedule 12 2026-04-02 19:30")
+        return
+
+    if scheduled_utc <= datetime.now(timezone.utc):
+        await update.message.reply_text("Thoi gian dat lich phai o tuong lai theo gio Viet Nam.")
+        return
+
+    db = SessionLocal()
+    try:
+        job = crud.get_job(db, job_id)
+        if not job:
+            await update.message.reply_text("Khong tim thay job.")
+            return
+
+        job = crud.set_job_schedule(db, job, scheduled_utc)
+        if job.status == "approved":
+            enqueue_publish_job(job.id, eta=ensure_utc_datetime(job.scheduled_publish_at))
+        await update.message.reply_text(
+            f"Da dat lich job {job.id} luc {scheduled_vn.strftime('%Y-%m-%d %H:%M ICT')}."
+        )
+    finally:
+        db.close()
+
+
+def parse_add_arguments(args: list[str]) -> tuple[str, str | None, datetime | None] | None:
     if not args:
         return None
 
@@ -290,11 +350,30 @@ def parse_add_arguments(args: list[str]) -> tuple[str, str | None] | None:
     if not url:
         return None
 
-    profile_code = None
-    if len(args) > 1:
-        profile_code = args[1].strip().upper() or None
+    vietnam_tz = ZoneInfo("Asia/Ho_Chi_Minh")
+    profile_code: str | None = None
+    scheduled_utc = None
 
-    return url, profile_code
+    if len(args) == 1:
+        return url, None, None
+
+    if len(args) == 2:
+        profile_code = args[1].strip().upper() or None
+        return url, profile_code, None
+
+    if len(args) != 4:
+        return None
+
+    profile_code = args[1].strip().upper() or None
+    try:
+        scheduled_vn = datetime.strptime(f"{args[2].strip()} {args[3].strip()}", "%Y-%m-%d %H:%M").replace(
+            tzinfo=vietnam_tz
+        )
+        scheduled_utc = scheduled_vn.astimezone(timezone.utc)
+    except ValueError:
+        return None
+
+    return url, profile_code, scheduled_utc
 
 
 async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:

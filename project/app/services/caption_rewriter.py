@@ -9,6 +9,7 @@ import requests
 from app.core.config import get_settings
 from app.db.models import Job
 from app.services.profile_selector import CaptionProfile
+from app.services.translator import TranslatorService
 
 
 PROMPT_TEMPLATE = """You are a social media caption rewriting model.
@@ -60,6 +61,7 @@ Tone guidance: {tone_guidance}
 class CaptionRewriterService:
     def __init__(self) -> None:
         self.settings = get_settings()
+        self.translator = TranslatorService()
 
     def generate_caption_package(self, job: Job, profile: CaptionProfile) -> dict[str, Any]:
         if not self.settings.deepseek_api_key:
@@ -108,13 +110,16 @@ class CaptionRewriterService:
     def _sanitize(self, payload: dict[str, Any], profile: CaptionProfile) -> dict[str, Any]:
         captions = payload.get("captions", {})
         hashtags = payload.get("hashtags", [])[:6]
+        neutral = self._translate_for_profile(self._ensure_caption(captions.get("neutral", ""), profile), profile)
+        public_clean = self._translate_for_profile(self._ensure_caption(captions.get("public_clean", ""), profile), profile)
+        more_engaging = self._translate_for_profile(self._ensure_caption(captions.get("more_engaging", ""), profile), profile)
         return {
-            "summary": str(payload.get("summary", ""))[:500],
+            "summary": self._translate_for_profile(str(payload.get("summary", ""))[:500], profile),
             "risk_flags": [str(item) for item in payload.get("risk_flags", [])][:10],
             "captions": {
-                "neutral": self._ensure_caption(captions.get("neutral", ""), profile),
-                "public_clean": self._ensure_caption(captions.get("public_clean", ""), profile),
-                "more_engaging": self._ensure_caption(captions.get("more_engaging", ""), profile),
+                "neutral": neutral,
+                "public_clean": public_clean,
+                "more_engaging": more_engaging,
             },
             "hashtags": [tag if str(tag).startswith("#") else f"#{tag}" for tag in hashtags],
         }
@@ -165,7 +170,7 @@ class CaptionRewriterService:
         return defaults.get(profile.language, ["#video", "#update", "#trending"])
 
     def _localize_fallback(self, text: str, profile: CaptionProfile) -> str:
-        return text
+        return self._translate_for_profile(text, profile)
 
     def _sanitize_caption_text(self, text: str) -> str:
         value = self._strip_hashtags(text)
@@ -192,3 +197,9 @@ class CaptionRewriterService:
     def _strip_hashtags(self, text: str) -> str:
         value = re.sub(r"(?<!\w)#[^\s#]+", " ", text)
         return re.sub(r"\s+", " ", value).strip(" ,.-")
+
+    def _translate_for_profile(self, text: str, profile: CaptionProfile) -> str:
+        value = " ".join(str(text).split()).strip()
+        if not value or profile.language == "en":
+            return value
+        return self.translator.translate_text(value, profile.language)[:260]

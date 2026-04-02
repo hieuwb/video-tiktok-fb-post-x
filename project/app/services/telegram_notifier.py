@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import requests
 
 from app.core.config import get_settings
+from app.core.utils import ensure_utc_datetime
 from app.db import crud
 from app.db.session import SessionLocal
 from app.db.models import Job
@@ -12,6 +14,8 @@ from app.services.runtime_settings import RuntimeSettingsService
 
 
 class TelegramNotifier:
+    vietnam_tz = ZoneInfo("Asia/Ho_Chi_Minh")
+
     def __init__(self) -> None:
         self.settings = get_settings()
         self.base_url = f"https://api.telegram.org/bot{self.settings.telegram_bot_token}"
@@ -46,6 +50,10 @@ class TelegramNotifier:
 
     def format_job_status(self, job: Job) -> str:
         autopost_status = "on" if RuntimeSettingsService().get_auto_post_enabled() else "off"
+        scheduled_at = "-"
+        scheduled_publish_at = ensure_utc_datetime(job.scheduled_publish_at)
+        if scheduled_publish_at:
+            scheduled_at = scheduled_publish_at.astimezone(self.vietnam_tz).strftime("%Y-%m-%d %H:%M ICT")
         return "\n".join(
             [
                 f"Job ID: {job.id}",
@@ -55,6 +63,7 @@ class TelegramNotifier:
                 f"Auto-post: {autopost_status}",
                 f"Profile: {job.selected_profile or '-'}",
                 f"Language: {job.target_language or '-'}",
+                f"Schedule (VN): {scheduled_at}",
                 f"Caption: {job.selected_caption or '-'}",
                 f"Hashtags: {job.hashtags or '-'}",
                 f"Output: {job.output_video_path or job.raw_video_path or '-'}",
@@ -107,8 +116,16 @@ class TelegramNotifier:
             job = crud.get_job(db, job_id)
             if not job:
                 return
-            self.send_message(
-                f"Job {job.id} auto-post queued.\nProfile: {job.selected_profile or '-'}\nLanguage: {job.target_language or '-'}"
-            )
+            message = [
+                f"Job {job.id} auto-post queued.",
+                f"Profile: {job.selected_profile or '-'}",
+                f"Language: {job.target_language or '-'}",
+            ]
+            scheduled_publish_at = ensure_utc_datetime(job.scheduled_publish_at)
+            if scheduled_publish_at:
+                message.append(
+                    f"Schedule (VN): {scheduled_publish_at.astimezone(self.vietnam_tz).strftime('%Y-%m-%d %H:%M ICT')}"
+                )
+            self.send_message("\n".join(message))
         finally:
             db.close()

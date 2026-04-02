@@ -3,6 +3,7 @@ import logging
 from app.core.config import get_settings
 from app.db import crud
 from app.db.session import SessionLocal
+from app.core.utils import ensure_utc_datetime
 from app.services.caption_rewriter import CaptionRewriterService
 from app.services.profile_selector import ProfileSelectorService
 from app.services.runtime_settings import RuntimeSettingsService
@@ -59,7 +60,7 @@ def process_caption(job_id: int) -> None:
         )
         if next_status == "approved":
             notifier.notify_auto_post_queued(job.id)
-            enqueue_publish_job(job.id)
+            enqueue_publish_job(job.id, eta=ensure_utc_datetime(job.scheduled_publish_at))
         else:
             notifier.notify_review_ready(job.id)
     except Exception as exc:

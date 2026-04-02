@@ -1,6 +1,6 @@
 from collections.abc import Generator
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import get_settings
@@ -15,6 +15,17 @@ SessionLocal = sessionmaker(bind=engine, autocommit=False, autoflush=False)
 
 def init_db() -> None:
     Base.metadata.create_all(bind=engine)
+    _ensure_columns()
+
+
+def _ensure_columns() -> None:
+    inspector = inspect(engine)
+    if "jobs" not in inspector.get_table_names():
+        return
+    columns = {column["name"] for column in inspector.get_columns("jobs")}
+    with engine.begin() as connection:
+        if "scheduled_publish_at" not in columns:
+            connection.execute(text("ALTER TABLE jobs ADD COLUMN scheduled_publish_at DATETIME"))
 
 
 def get_db() -> Generator[Session, None, None]:

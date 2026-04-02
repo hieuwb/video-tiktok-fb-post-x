@@ -1,4 +1,5 @@
 import unittest
+from datetime import datetime, timezone
 
 from app.db import crud
 from app.db.models import Job
@@ -30,6 +31,17 @@ class ProfileOverrideTests(unittest.TestCase):
         updated = crud.set_job_profile(self.db, job, profile.code, profile.language)
         self.assertEqual(updated.selected_profile, "A4")
         self.assertEqual(updated.target_language, "zh")
+
+    def test_set_job_schedule(self) -> None:
+        job = crud.create_job(
+            self.db,
+            source_url="https://www.tiktok.com/@demo/video/123",
+            source_platform="tiktok",
+            status="queued",
+        )
+        scheduled_at = datetime(2026, 4, 2, 12, 0, tzinfo=timezone.utc)
+        updated = crud.set_job_schedule(self.db, job, scheduled_at)
+        self.assertIsNotNone(updated.scheduled_publish_at)
 
 
 if __name__ == "__main__":

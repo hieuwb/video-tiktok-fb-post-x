@@ -34,13 +34,22 @@ class SmokeTests(unittest.TestCase):
     def test_add_argument_parsing(self) -> None:
         self.assertEqual(
             parse_add_arguments(["https://www.tiktok.com/@demo/video/123", "a4"]),
-            ("https://www.tiktok.com/@demo/video/123", "A4"),
+            ("https://www.tiktok.com/@demo/video/123", "A4", None),
         )
         self.assertEqual(
             parse_add_arguments(["https://www.tiktok.com/@demo/video/123"]),
-            ("https://www.tiktok.com/@demo/video/123", None),
+            ("https://www.tiktok.com/@demo/video/123", None, None),
         )
         self.assertIsNone(parse_add_arguments([]))
+
+        parsed = parse_add_arguments(
+            ["https://www.tiktok.com/@demo/video/123", "A2", "2026-04-02", "19:30"]
+        )
+        self.assertIsNotNone(parsed)
+        assert parsed is not None
+        self.assertEqual(parsed[0], "https://www.tiktok.com/@demo/video/123")
+        self.assertEqual(parsed[1], "A2")
+        self.assertIsNotNone(parsed[2])
 
     def test_job_create_route(self) -> None:
         response = create_job(
@@ -123,6 +132,27 @@ class SmokeTests(unittest.TestCase):
         self.assertEqual(package["captions"]["neutral"], "Nice clip")
         self.assertEqual(package["captions"]["public_clean"], "Great rally")
         self.assertEqual(package["captions"]["more_engaging"], "Amazing play")
+
+    @patch("app.services.translator.TranslatorService.translate_text")
+    def test_non_english_profile_localizes_caption_output(self, mock_translate: Mock) -> None:
+        mock_translate.side_effect = lambda text, target: f"[{target}] {text}"
+        profile = ProfileSelectorService().get_profile("A2")
+        service = CaptionRewriterService()
+        package = service._sanitize(
+            {
+                "summary": "hello",
+                "risk_flags": [],
+                "captions": {
+                    "neutral": "Nice clip",
+                    "public_clean": "Great rally",
+                    "more_engaging": "Amazing play",
+                },
+                "hashtags": ["#video"],
+            },
+            profile,
+        )
+        self.assertEqual(package["captions"]["public_clean"], "[ja] Great rally")
+        self.assertEqual(package["summary"], "[ja] hello")
 
     def test_downloader_selects_matching_entry_by_source_url(self) -> None:
         service = DownloaderService()

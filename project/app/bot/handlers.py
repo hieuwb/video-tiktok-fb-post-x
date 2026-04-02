@@ -10,6 +10,7 @@ from app.bot.commands import (
     mode_command,
     platforms_command,
     profiles_command,
+    schedule_command,
     profile_command,
     reject_command,
     retry_command,
@@ -38,6 +39,7 @@ def register_handlers(application: Application) -> None:
     application.add_handler(CommandHandler("reject", reject_command, filters=authorized))
     application.add_handler(CommandHandler("retry", retry_command, filters=authorized))
     application.add_handler(CommandHandler("profiles", profiles_command, filters=authorized))
+    application.add_handler(CommandHandler("schedule", schedule_command, filters=authorized))
     application.add_handler(CommandHandler("autopost", autopost_command, filters=authorized))
     application.add_handler(CommandHandler("profile", profile_command, filters=authorized))
     application.add_handler(CommandHandler("caption", caption_command, filters=authorized))

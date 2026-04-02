@@ -25,9 +25,9 @@ celery_app.conf.update(
 )
 
 
-def dispatch_task(task_name: str, *args) -> bool:
+def dispatch_task(task_name: str, *args, eta=None) -> bool:
     try:
-        celery_app.send_task(task_name, args=args)
+        celery_app.send_task(task_name, args=args, eta=eta)
         return True
     except OperationalError:
         return False

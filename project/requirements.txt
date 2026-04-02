@@ -13,4 +13,4 @@ SQLAlchemy==2.0.43
 torch==2.11.0+cpu; platform_system == "Linux"
 tweepy==4.16.0
 uvicorn[standard]==0.35.0
-yt-dlp==2025.9.5
+yt-dlp>=2025.9.5

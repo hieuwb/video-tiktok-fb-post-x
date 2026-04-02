@@ -42,4 +42,5 @@ class Job(Base):
         onupdate=lambda: datetime.now(timezone.utc),
     )
     approved_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    scheduled_publish_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

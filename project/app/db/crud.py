@@ -46,6 +46,7 @@ def mark_job_posted(db: Session, job: Job, post_id: str, post_url: str) -> Job:
         status="posted",
         x_post_id=post_id,
         x_post_url=post_url,
+        scheduled_publish_at=None,
         posted_at=datetime.now(timezone.utc),
     )
 
@@ -57,3 +58,7 @@ def set_job_profile(db: Session, job: Job, profile_code: str, target_language: s
         selected_profile=profile_code,
         target_language=target_language,
     )
+
+
+def set_job_schedule(db: Session, job: Job, scheduled_publish_at: datetime | None) -> Job:
+    return update_job(db, job, scheduled_publish_at=scheduled_publish_at)
