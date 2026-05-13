@@ -11,14 +11,22 @@ from app.core.utils import ensure_utc_datetime
 from app.db import crud
 from app.db.session import SessionLocal
 from app.services.profile_selector import ProfileSelectorService
+from app.services.publish_scheduler import PublishScheduler
 from app.services.runtime_settings import RuntimeSettingsService
 from app.services.telegram_notifier import TelegramNotifier
 from app.workers.tasks_caption import retry_caption_generation
 from app.workers.tasks_download import enqueue_processing_job
 from app.workers.tasks_publish import enqueue_publish_job
+from app.workers.tasks_reup import enqueue_auto_crawl
 
 
 HELP_TEXT = """Huong dan su dung bot:
+
+LUONG CHINH (auto-find → auto-edit → review):
+Bot tu chay 3 lan/ngay (08h, 14h, 20h VN), moi lan crawl TikTok+YouTube,
+tim 1 video silent, tu strip audio + mix nhac no-copyright + launder
+anti-fingerprint, sinh caption EN, gui review card ve day. Ban /approve
+hoac /reject. Approved job tu post vao slot ke tiep (14h/19h/01h VN).
 
 /start
 Bat dau va kiem tra bot dang online.
@@ -39,7 +47,7 @@ Bat/tat tu dong dang bai len X ngay trong Telegram.
 Xem danh sach 4 profile ngon ngu: English, Japanese, Korean, Chinese.
 
 /add <url> [A1-A4] [YYYY-MM-DD HH:MM]
-Them link video Facebook, TikTok hoac Instagram de xu ly, co the chon profile va lich dang theo gio Viet Nam ngay trong lenh.
+Them link video Facebook, TikTok, Instagram hoac YouTube de xu ly, co the chon profile va lich dang theo gio Viet Nam ngay trong lenh.
 
 /status <job_id>
 Xem tien do xu ly, caption, profile, output va loi neu co.
@@ -60,10 +68,25 @@ Thong bao rang subtitle da duoc tat.
 Chay lai job neu job dang fail hoac can xu ly lai.
 
 /approve <job_id>
-Duyet dang bai len X khi dang o che do review.
+Duyet va dang bai len tat ca (X + YouTube + Facebook).
+
+/approve_x <job_id>
+Chi dang len X.
+
+/approve_yt <job_id>
+Chi dang len YouTube.
+
+/approve_fb <job_id>
+Chi dang len Facebook.
 
 /reject <job_id>
-Tu choi job va dung dang bai."""
+Tu choi job va dung dang bai.
+
+/find  hoac  /crawl_now
+Trigger auto-crawl TikTok+YouTube ngay, khong doi cron 3 lan/ngay.
+
+/queue
+Xem danh sach job dang awaiting_review."""
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -78,7 +101,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def platforms_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "Nen tang dang ho tro:\n- Facebook\n- TikTok\n- Instagram"
+        "Nen tang dang ho tro:\n- Facebook\n- TikTok (manual + auto-crawl)\n- Instagram\n- YouTube (manual + auto-crawl)"
     )
 
 
@@ -100,7 +123,7 @@ async def mode_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     parsed = parse_add_arguments(context.args)
     if not parsed:
-        await update.message.reply_text("Cach dung: /add <link_facebook_or_tiktok_or_instagram> [A1-A4] [YYYY-MM-DD HH:MM]")
+        await update.message.reply_text("Cach dung: /add <link_facebook|tiktok|instagram|youtube> [A1-A4] [YYYY-MM-DD HH:MM]")
         return
     url, profile_code, scheduled_utc = parsed
     if not validate_source_url(url):
@@ -140,20 +163,44 @@ async def add_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def status_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    job = await _get_job_from_args(update, context)
-    if not job:
-        return
-    notifier = TelegramNotifier()
-    await update.message.reply_text(notifier.format_job_status(job))
-
-
-async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    job = await _get_job_from_args(update, context)
-    if not job:
+    job_id = await _get_job_from_args(update, context)
+    if not job_id:
         return
     db = SessionLocal()
     try:
-        refreshed = crud.get_job(db, job.id)
+        job = crud.get_job(db, job_id)
+        if not job:
+            await update.message.reply_text("Khong tim thay job.")
+            return
+        notifier = TelegramNotifier()
+        await update.message.reply_text(notifier.format_job_status(job))
+    finally:
+        db.close()
+
+
+async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _approve_job(update, context, targets="all")
+
+
+async def approve_x_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _approve_job(update, context, targets="x")
+
+
+async def approve_yt_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _approve_job(update, context, targets="youtube")
+
+
+async def approve_fb_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await _approve_job(update, context, targets="facebook")
+
+
+async def _approve_job(update: Update, context: ContextTypes.DEFAULT_TYPE, targets: str) -> None:
+    job_id = await _get_job_from_args(update, context)
+    if not job_id:
+        return
+    db = SessionLocal()
+    try:
+        refreshed = crud.get_job(db, job_id)
         if not refreshed:
             await update.message.reply_text("Khong tim thay job.")
             return
@@ -162,27 +209,93 @@ async def approve_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 f"Job {refreshed.id} dang o trang thai {refreshed.status}, khong phai awaiting_review."
             )
             return
-        refreshed = crud.mark_job_approved(db, refreshed)
-        enqueue_publish_job(refreshed.id, eta=refreshed.scheduled_publish_at)
-        message = f"Da duyet job {refreshed.id}"
+
+        # Gán slot tự động nếu user chưa /schedule. 3 slot/ngày trong window
+        # 13:00-02:00 VN — slot dispatcher chạy 5p/lần sẽ kích publish khi tới giờ.
+        if not refreshed.scheduled_publish_at:
+            try:
+                slot = PublishScheduler().next_slot_utc(db)
+                refreshed = crud.set_job_schedule(db, refreshed, slot)
+            except Exception:
+                # Fallback: publish ngay nếu scheduler lỗi (vd: POST_SLOTS_VN rỗng).
+                pass
+
+        crud.update_job(
+            db,
+            refreshed,
+            status="approved",
+            approved_at=datetime.now(timezone.utc),
+            error_message=None,
+        )
+        # KHÔNG enqueue publish ngay — slot dispatcher (beat 5p/lần) sẽ pick up
+        # khi tới giờ. Trường hợp user /schedule sớm hơn now → vẫn dispatch tới.
+
+        label = {"all": "X + YouTube + Facebook", "both": "X + YouTube", "x": "chỉ X", "youtube": "chỉ YouTube", "facebook": "chỉ Facebook"}.get(targets, targets)
+        message = f"Da duyet job {refreshed.id} ({label})"
         scheduled_publish_at = ensure_utc_datetime(refreshed.scheduled_publish_at)
         if scheduled_publish_at:
             schedule_vn = scheduled_publish_at.astimezone(ZoneInfo("Asia/Ho_Chi_Minh")).strftime("%Y-%m-%d %H:%M ICT")
-            message += f" va len lich publish luc {schedule_vn}."
+            message += f" — slot publish: {schedule_vn}."
         else:
-            message += " va dua vao hang doi publish."
+            # Không có slot → publish ngay (fallback path).
+            enqueue_publish_job(refreshed.id, targets=targets)
+            message += " (publish ngay vì khong co slot trong)."
         await update.message.reply_text(message)
     finally:
         db.close()
 
 
+async def crawl_now_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    enqueue_auto_crawl()
+    await update.message.reply_text("Da trigger auto-crawl ngay. Theo doi qua /queue.")
+
+
+async def queue_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    db = SessionLocal()
+    try:
+        awaiting = crud.list_jobs_by_status(db, "awaiting_review", limit=20)
+        approved = crud.list_jobs_by_status(db, "approved", limit=20)
+        vn_tz = ZoneInfo("Asia/Ho_Chi_Minh")
+        lines: list[str] = []
+
+        if approved:
+            lines.append(f"Approved (waiting slot, {len(approved)}):")
+            for job in approved:
+                slot_text = "-"
+                if job.scheduled_publish_at:
+                    slot_text = ensure_utc_datetime(job.scheduled_publish_at).astimezone(vn_tz).strftime(
+                        "%H:%M %d/%m"
+                    )
+                title = (job.source_title or "")[:50]
+                lines.append(f"#{job.id} [{job.source_platform}] {title} | slot {slot_text}")
+            lines.append("")
+
+        if awaiting:
+            lines.append(f"Awaiting_review ({len(awaiting)}):")
+            for job in awaiting:
+                expires = "-"
+                if job.review_expires_at:
+                    expires = ensure_utc_datetime(job.review_expires_at).astimezone(vn_tz).strftime(
+                        "%H:%M %d/%m"
+                    )
+                title = (job.source_title or "")[:50]
+                lines.append(f"#{job.id} [{job.source_platform}] {title} | expires {expires}")
+
+        if not lines:
+            await update.message.reply_text("Queue trong (khong co job awaiting_review/approved).")
+            return
+        await update.message.reply_text("\n".join(lines))
+    finally:
+        db.close()
+
+
 async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    job = await _get_job_from_args(update, context)
-    if not job:
+    job_id = await _get_job_from_args(update, context)
+    if not job_id:
         return
     db = SessionLocal()
     try:
-        refreshed = crud.get_job(db, job.id)
+        refreshed = crud.get_job(db, job_id)
         if not refreshed:
             await update.message.reply_text("Khong tim thay job.")
             return
@@ -193,11 +306,11 @@ async def reject_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def retry_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    job = await _get_job_from_args(update, context)
-    if not job:
+    job_id = await _get_job_from_args(update, context)
+    if not job_id:
         return
-    enqueue_processing_job(job.id)
-    await update.message.reply_text(f"Dang chay lai job {job.id}.")
+    enqueue_processing_job(job_id)
+    await update.message.reply_text(f"Dang chay lai job {job_id}.")
 
 
 async def profiles_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -236,12 +349,20 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("Cach dung: /profile <job_id> <A1-A4>")
         return
     if len(context.args) == 1:
-        maybe_job = await _get_job_from_args(update, context)
-        if not maybe_job:
+        maybe_job_id = await _get_job_from_args(update, context)
+        if not maybe_job_id:
             return
-        await update.message.reply_text(
-            f"Job {maybe_job.id} dang dung profile: {maybe_job.selected_profile or '-'} | ngon ngu: {maybe_job.target_language or '-'}"
-        )
+        db2 = SessionLocal()
+        try:
+            maybe_job = crud.get_job(db2, maybe_job_id)
+            if not maybe_job:
+                await update.message.reply_text("Khong tim thay job.")
+                return
+            await update.message.reply_text(
+                f"Job {maybe_job.id} dang dung profile: {maybe_job.selected_profile or '-'} | ngon ngu: {maybe_job.target_language or '-'}"
+            )
+        finally:
+            db2.close()
         return
 
     try:
@@ -283,22 +404,30 @@ async def profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 
 async def caption_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    job = await _get_job_from_args(update, context)
-    if not job:
+    job_id = await _get_job_from_args(update, context)
+    if not job_id:
         return
-    text = "\n".join(
-        [
-            f"Job {job.id}",
-            f"Selected: {job.selected_caption or '-'}",
-            f"Profile: {job.selected_profile or '-'}",
-            f"Language: {job.target_language or '-'}",
-            f"Primary: {job.ai_caption_primary or '-'}",
-            f"Alt 1: {job.ai_caption_alt_1 or '-'}",
-            f"Alt 2: {job.ai_caption_alt_2 or '-'}",
-            f"Hashtags: {job.hashtags or '-'}",
-        ]
-    )
-    await update.message.reply_text(text)
+    db = SessionLocal()
+    try:
+        job = crud.get_job(db, job_id)
+        if not job:
+            await update.message.reply_text("Khong tim thay job.")
+            return
+        text = "\n".join(
+            [
+                f"Job {job.id}",
+                f"Selected: {job.selected_caption or '-'}",
+                f"Profile: {job.selected_profile or '-'}",
+                f"Language: {job.target_language or '-'}",
+                f"Primary: {job.ai_caption_primary or '-'}",
+                f"Alt 1: {job.ai_caption_alt_1 or '-'}",
+                f"Alt 2: {job.ai_caption_alt_2 or '-'}",
+                f"Hashtags: {job.hashtags or '-'}",
+            ]
+        )
+        await update.message.reply_text(text)
+    finally:
+        db.close()
 
 
 async def schedule_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -381,14 +510,15 @@ async def sub_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def recaption_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    job = await _get_job_from_args(update, context)
-    if not job:
+    job_id = await _get_job_from_args(update, context)
+    if not job_id:
         return
-    retry_caption_generation(job.id)
-    await update.message.reply_text(f"Da dua caption regeneration cua job {job.id} vao queue.")
+    retry_caption_generation(job_id)
+    await update.message.reply_text(f"Da dua caption regeneration cua job {job_id} vao queue.")
 
 
 async def _get_job_from_args(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Return job_id (int) if valid, else None. Does NOT return ORM object."""
     if not context.args:
         if update.message:
             await update.message.reply_text("Can truyen <job_id>.")
@@ -403,8 +533,10 @@ async def _get_job_from_args(update: Update, context: ContextTypes.DEFAULT_TYPE)
     db = SessionLocal()
     try:
         job = crud.get_job(db, job_id)
-        if not job and update.message:
-            await update.message.reply_text("Khong tim thay job.")
-        return job
+        if not job:
+            if update.message:
+                await update.message.reply_text("Khong tim thay job.")
+            return None
+        return job_id
     finally:
         db.close()

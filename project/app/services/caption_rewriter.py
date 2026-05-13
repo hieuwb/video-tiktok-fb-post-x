@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
@@ -10,6 +11,60 @@ from app.core.config import get_settings
 from app.db.models import Job
 from app.services.profile_selector import CaptionProfile
 from app.services.translator import TranslatorService
+
+
+logger = logging.getLogger(__name__)
+
+
+SILENT_PROMPT_TEMPLATE = """You are writing English social-media captions for a SILENT short video (no dialogue, no voice-over) reuploaded from {platform}.
+
+CHANNEL: global English-speaking audience across all countries. Niches: ANIME (edits / AMV / aesthetic) and LIFE HACKS (kitchen / DIY / clever tricks).
+
+YOUR STYLE: dramatic, provocative, hot-take. The caption must READ LIKE AN OPINIONATED JUDGMENT, not a neutral description. Turn any mundane visual into a universal-life-truth or harsh judgment that sparks debate in the comments. This drives engagement and viral shares.
+
+Formula for x_caption (follow loosely, 2-3 sentences):
+  1. Assert the skill/habit/aesthetic shown is ESSENTIAL / says something deep about the viewer.
+  2. Explain the stakes — it shapes your future, reveals character, separates winners.
+  3. Drop a HARSH verdict on people who lack it (failures, poor taste, doomed, behind).
+
+Example (anime edit):
+If this scene doesn't move you, you've already lost the part of yourself that dreams. The ones who feel it deep are the same people who go on to build something real.
+
+Example (life hack):
+If you are still doing this the old way in 2026, you are choosing to struggle. Small tricks like this separate the smart from the stuck.
+
+Example (oddly satisfying):
+The people who pause to watch this all the way through are the same ones who finish what they start. Everyone else wonders why life feels so chaotic.
+
+Constraints:
+- English ONLY (audience is global — English is the lingua franca of short-form).
+- NO emojis, or at most 1 subtle one.
+- NO hashtags inline (hashtags go in the x_hashtags field).
+- Keep it 120-240 chars total.
+- Do NOT invent specific facts (names, places, anime titles) not in the input.
+- Do NOT mention the source platform.
+- If source is anime: focus on the FEELING / aesthetic, not specific characters or plot.
+- If source is life hack: focus on the JUDGMENT of those who don't know it.
+- HASHTAGS: chỉ đề xuất 1 hashtag bổ sung. Topic hashtag (#anime hoặc #lifehack)
+  sẽ được hệ thống tự thêm. Đừng đề xuất #anime / #lifehack — sẽ bị duplicate.
+
+Source title: {source_title}
+Source tags: {source_tags}
+Mood: {mood}
+
+Output valid JSON only:
+{{
+  "x_caption": "2-3 dramatic sentences, opinionated, ends with a harsh judgment",
+  "x_hashtags": ["#OneSupplementaryTag"],
+  "youtube_title": "<=90 chars, clickbait hook style, NO #Shorts (we add it)",
+  "youtube_description": "2-4 sentences, dramatic hook + CTA. <=500 chars",
+  "youtube_tags": ["tag1", "tag2", "...up to 12 lowercase tags"]
+}}
+
+Rules:
+- x_hashtags: ĐÚNG 1 hashtag (lowercase hoặc CamelCase, no spaces). Đừng dùng #anime/#lifehack.
+- youtube_tags: 8-12 tags để boost SEO discovery (separate from x_hashtags).
+"""
 
 
 PROMPT_TEMPLATE = """You are a social media caption rewriting model.
@@ -109,7 +164,8 @@ class CaptionRewriterService:
 
     def _sanitize(self, payload: dict[str, Any], profile: CaptionProfile) -> dict[str, Any]:
         captions = payload.get("captions", {})
-        hashtags = payload.get("hashtags", [])[:6]
+        # Cap 2 hashtag/post (đồng nhất với silent path, nhẹ feed).
+        hashtags = payload.get("hashtags", [])[:2]
         neutral = self._translate_for_profile(self._ensure_caption(captions.get("neutral", ""), profile), profile)
         public_clean = self._translate_for_profile(self._ensure_caption(captions.get("public_clean", ""), profile), profile)
         more_engaging = self._translate_for_profile(self._ensure_caption(captions.get("more_engaging", ""), profile), profile)
@@ -203,3 +259,191 @@ class CaptionRewriterService:
         if not value or profile.language == "en":
             return value
         return self.translator.translate_text(value, profile.language)[:260]
+
+    # ─────────── Silent / Auto-crawl pipeline ───────────
+
+    def _topic_hashtag(
+        self,
+        source_title: str,
+        source_tags: list[str] | None,
+        mood: str | None,
+    ) -> str:
+        """Quyết định topic hashtag bắt buộc từ title/tags/mood.
+
+        Kênh global scope = anime + life hack. Mọi video PHẢI có 1 trong 2.
+        Decision tree (high → low priority):
+          1. Title/tags chứa từ khoá anime → #anime
+          2. Title/tags chứa từ khoá life hack → #lifehack
+          3. Mood = cinematic → #anime (anime classify ra cinematic theo mood_for_tags)
+          4. Mặc định → #lifehack
+        """
+        blob = (source_title + " " + " ".join(source_tags or [])).lower()
+        anime_kws = (
+            "anime", "amv", "manga", "ghibli", "shonen", "shoujo",
+            "anime edit", "aesthetic anime",
+        )
+        lifehack_kws = (
+            "life hack", "lifehack", "kitchen hack", "hack", "diy",
+            "trick", "clever", "satisfying", "oddly satisfying",
+            "organize", "kitchen tip",
+        )
+        if any(kw in blob for kw in anime_kws):
+            return "#anime"
+        if any(kw in blob for kw in lifehack_kws):
+            return "#lifehack"
+        if (mood or "").lower() == "cinematic":
+            return "#anime"
+        return "#lifehack"
+
+    def generate_silent_package(
+        self,
+        source_title: str,
+        source_tags: list[str] | None = None,
+        platform: str = "tiktok",
+        mood: str = "chill",
+        music_credit: str = "",
+    ) -> dict[str, Any]:
+        """Sinh caption cho video không lời (animation/pet) → EN cho X + YouTube.
+
+        Trả về:
+        {
+          "x_caption": str (≤240 ký tự, đã kèm hashtag inline),
+          "x_hashtags": list[str],
+          "youtube_title": str (≤100 ký tự, sẽ được thêm #Shorts ở service),
+          "youtube_description": str,
+          "youtube_tags": list[str],
+        }
+        """
+        source_tags = source_tags or []
+        topic_tag = self._topic_hashtag(source_title, source_tags, mood)
+
+        if not self.settings.deepseek_api_key:
+            return self._silent_fallback(source_title, source_tags, platform, mood, music_credit, topic_tag)
+
+        prompt = SILENT_PROMPT_TEMPLATE.format(
+            source_title=source_title or "",
+            source_tags=", ".join(source_tags)[:300],
+            platform=platform,
+            mood=mood,
+        )
+        payload = {
+            "model": self.settings.deepseek_model,
+            "messages": [
+                {"role": "system", "content": "Return valid JSON only. English only. Be provocative and dramatic to maximize engagement."},
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": 0.85,
+            "response_format": {"type": "json_object"},
+        }
+        try:
+            response = requests.post(
+                f"{self.settings.deepseek_base_url.rstrip('/')}/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {self.settings.deepseek_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+                timeout=60,
+            )
+            response.raise_for_status()
+            raw = response.json()["choices"][0]["message"]["content"]
+            parsed = json.loads(self._strip_code_fences(raw))
+            return self._sanitize_silent(parsed, mood, music_credit, topic_tag)
+        except (requests.RequestException, KeyError, IndexError, json.JSONDecodeError) as exc:
+            logger.warning("Silent caption LLM failed (%s), fallback", exc)
+            return self._silent_fallback(source_title, source_tags, platform, mood, music_credit, topic_tag)
+
+    def _sanitize_silent(
+        self,
+        payload: dict[str, Any],
+        mood: str,
+        music_credit: str,
+        topic_tag: str,
+    ) -> dict[str, Any]:
+        # Tags raw từ LLM, bỏ rỗng + bỏ trùng topic_tag (nếu LLM lỡ đề xuất).
+        raw_tags = [self._norm_hashtag(h) for h in payload.get("x_hashtags", []) if h]
+        topic_lower = topic_tag.lower()
+        raw_tags = [t for t in raw_tags if t and t.lower() != topic_lower]
+        # 2 hashtags total: topic_tag (forced) + 1 từ LLM (hoặc fallback)
+        if raw_tags:
+            hashtags_x = [topic_tag, raw_tags[0]]
+        else:
+            hashtags_x = [topic_tag, "#shorts" if topic_tag == "#anime" else "#viral"]
+
+        yt_tags = [self._norm_tag(t) for t in payload.get("youtube_tags", [])][:12]
+        x_caption = self._cap_text(payload.get("x_caption", ""), 260)
+        yt_title = self._cap_text(payload.get("youtube_title", ""), 95)
+        yt_description = self._cap_text(payload.get("youtube_description", ""), 2500)
+
+        if music_credit:
+            credit_line = f"\n🎵 Music: {music_credit}"
+            if len(yt_description) + len(credit_line) <= 2000:
+                yt_description = yt_description + credit_line
+
+        if not x_caption:
+            x_caption = "Pure visual vibes ✨"
+        if not yt_title:
+            yt_title = "Relaxing silent moment"
+
+        return {
+            "x_caption": x_caption,
+            "x_hashtags": hashtags_x,
+            "youtube_title": yt_title,
+            "youtube_description": yt_description,
+            "youtube_tags": yt_tags,
+        }
+
+    def _silent_fallback(
+        self,
+        source_title: str,
+        source_tags: list[str],
+        platform: str,
+        mood: str,
+        music_credit: str,
+        topic_tag: str,
+    ) -> dict[str, Any]:
+        # Fallback dramatic hot-take khi không có LLM. Không bịa chi tiết, chỉ
+        # judgement chung chung để tạo engagement.
+        # Hashtags: 2 cái = topic + 1 generic phù hợp.
+        supplementary = "#shorts" if topic_tag == "#anime" else "#viral"
+        hashtags = [topic_tag, supplementary]
+        # YouTube tags vẫn nhiều để hỗ trợ SEO discovery.
+        if topic_tag == "#anime":
+            yt_tags = ["shorts", "anime", "anime edit", "amv", "aesthetic", "anime shorts", mood]
+            caption = (
+                "Those who pause to feel a scene like this are the same ones who "
+                "build something real with their lives. Everyone else just scrolls "
+                "past their own dreams."
+            )
+            yt_title = "Only People With Taste Notice This"
+        else:
+            yt_tags = ["shorts", "life hack", "lifehack", "kitchen hack", "diy", "satisfying", "trick", mood]
+            caption = (
+                "If you are still doing this the old way in 2026, you are choosing "
+                "to struggle. Small tricks like this separate the smart from the stuck."
+            )
+            yt_title = "The Hack That Separates The Smart From The Stuck"
+        desc = f"{caption}\n\nDrop a comment if you agree. Save this one."
+        if music_credit:
+            desc += f"\n🎵 Music: {music_credit}"
+        return {
+            "x_caption": caption[:240],
+            "x_hashtags": hashtags,
+            "youtube_title": yt_title[:90],
+            "youtube_description": desc,
+            "youtube_tags": yt_tags,
+        }
+
+    def _cap_text(self, value: Any, limit: int) -> str:
+        text = " ".join(str(value or "").split()).strip()
+        return text[:limit]
+
+    def _norm_hashtag(self, value: Any) -> str:
+        tag = str(value or "").strip().lstrip("#")
+        tag = re.sub(r"[^0-9A-Za-z_]+", "", tag)
+        return f"#{tag}" if tag else ""
+
+    def _norm_tag(self, value: Any) -> str:
+        tag = str(value or "").strip().lstrip("#").lower()
+        tag = re.sub(r"\s+", " ", tag)
+        return tag[:30]

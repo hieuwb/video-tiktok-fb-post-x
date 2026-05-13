@@ -23,9 +23,25 @@ def _ensure_columns() -> None:
     if "jobs" not in inspector.get_table_names():
         return
     columns = {column["name"] for column in inspector.get_columns("jobs")}
+    added_columns = [
+        ("scheduled_publish_at", "DATETIME"),
+        ("source_id", "VARCHAR(100)"),
+        ("is_auto_crawled", "BOOLEAN DEFAULT 0"),
+        ("crawl_mood", "VARCHAR(30)"),
+        ("preview_video_path", "TEXT"),
+        ("preview_thumbnail_path", "TEXT"),
+        ("youtube_title", "TEXT"),
+        ("youtube_description", "TEXT"),
+        ("youtube_tags", "TEXT"),
+        ("music_track_path", "TEXT"),
+        ("youtube_video_id", "VARCHAR(50)"),
+        ("youtube_url", "TEXT"),
+        ("review_expires_at", "DATETIME"),
+    ]
     with engine.begin() as connection:
-        if "scheduled_publish_at" not in columns:
-            connection.execute(text("ALTER TABLE jobs ADD COLUMN scheduled_publish_at DATETIME"))
+        for name, ddl in added_columns:
+            if name not in columns:
+                connection.execute(text(f"ALTER TABLE jobs ADD COLUMN {name} {ddl}"))
 
 
 def get_db() -> Generator[Session, None, None]:

@@ -31,7 +31,17 @@ services:
     depends_on:
       - redis
 
+  beat:
+    build: .
+    command: celery -A app.workers.celery_app.celery_app beat --loglevel=info
+    env_file:
+      - .env
+    volumes:
+      - ./:/app
+    depends_on:
+      - redis
+
   redis:
     image: redis:7-alpine
     ports:
-      - "6379:6379"
+      - "6381:6379"

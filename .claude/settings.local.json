@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -sx http://yuxuvqqw:xgsc2sdhvqkb@31.58.9.225:6298 --max-time 15 https://ipapi.co/json)",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(f\\\\\"IP: {d.get\\('ip'\\)}\\\\nCountry: {d.get\\('country_name'\\)} \\({d.get\\('country_code'\\)}\\)\\\\nCity: {d.get\\('city'\\)}\\\\nISP: {d.get\\('org'\\)}\\\\\"\\)\")"
+    ]
+  }
+}

@@ -16,6 +16,10 @@ ALLOWED_DOMAINS = {
     "www.tiktok.com",
     "vm.tiktok.com",
     "vt.tiktok.com",
+    "youtube.com",
+    "www.youtube.com",
+    "m.youtube.com",
+    "youtu.be",
 }
 
 
@@ -37,6 +41,8 @@ def detect_platform_from_url(url: str) -> str:
         return "tiktok"
     if "facebook" in host or host == "fb.watch":
         return "facebook"
+    if "youtube" in host or host == "youtu.be":
+        return "youtube"
     return "unknown"
 
 

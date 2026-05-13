@@ -48,6 +48,15 @@ class TelegramNotifier:
                 timeout=120,
             ).raise_for_status()
 
+    def send_photo(self, file_path: str, caption: str = "", chat_id: int | None = None) -> None:
+        with open(file_path, "rb") as handle:
+            requests.post(
+                f"{self.base_url}/sendPhoto",
+                data={"chat_id": chat_id or self._default_chat_id(), "caption": caption[:1024]},
+                files={"photo": handle},
+                timeout=60,
+            ).raise_for_status()
+
     def format_job_status(self, job: Job) -> str:
         autopost_status = "on" if RuntimeSettingsService().get_auto_post_enabled() else "off"
         scheduled_at = "-"
@@ -101,14 +110,65 @@ class TelegramNotifier:
             job = crud.get_job(db, job_id)
             if not job:
                 return
-            self.send_message(
-                f"Job {job.id} posted successfully.\nPost URL: {job.x_post_url or '-'}"
-            )
+            lines = [f"✅ Job {job.id} posted."]
+            if job.x_post_url:
+                lines.append(f"🐦 X: {job.x_post_url}")
+            if job.youtube_url:
+                lines.append(f"📺 YouTube: {job.youtube_url}")
+            if job.error_message:
+                lines.append(f"⚠️ Warnings: {job.error_message[:300]}")
+            self.send_message("\n".join(lines))
         finally:
             db.close()
 
     def notify_failure(self, job_id: int, error_message: str) -> None:
         self.send_message(f"Job {job_id} failed.\nError: {error_message[:1000]}")
+
+    def notify_reup_review_ready(self, job_id: int) -> None:
+        """Review card cho auto-crawl job: thumbnail + preview clip + caption + commands."""
+        if not self.settings.enable_send_preview_to_telegram:
+            return
+        db = SessionLocal()
+        try:
+            job = crud.get_job(db, job_id)
+            if not job:
+                return
+            expires_text = "-"
+            if job.review_expires_at:
+                expires_text = ensure_utc_datetime(job.review_expires_at).astimezone(
+                    self.vietnam_tz
+                ).strftime("%Y-%m-%d %H:%M ICT")
+
+            lines = [
+                f"🎬 Auto-crawl job {job.id} sẵn sàng review",
+                f"Source: {job.source_platform} | mood: {job.crawl_mood or '-'}",
+                f"Title: {(job.source_title or '')[:120]}",
+                f"URL: {job.source_url}",
+                "",
+                f"📝 X caption:\n{job.selected_caption or '-'}",
+                f"Hashtags: {job.hashtags or '-'}",
+                "",
+                f"📺 YT title: {job.youtube_title or '-'}",
+                f"YT tags: {job.youtube_tags or '-'}",
+                "",
+                f"🎵 Music: {Path(job.music_track_path).stem if job.music_track_path else '-'}",
+                f"Expires: {expires_text}",
+                "",
+                f"/approve {job.id}       → đăng cả X + YouTube + Facebook",
+                f"/approve_x {job.id}     → chỉ X",
+                f"/approve_yt {job.id}    → chỉ YouTube",
+                f"/approve_fb {job.id}    → chỉ Facebook",
+                f"/reject {job.id}        → bỏ",
+            ]
+            self.send_message("\n".join(lines))
+
+            if job.preview_thumbnail_path and Path(job.preview_thumbnail_path).exists():
+                self.send_photo(job.preview_thumbnail_path, caption=f"Thumbnail job {job.id}")
+            full_video = job.output_video_path or job.raw_video_path
+            if full_video and Path(full_video).exists():
+                self.send_video(full_video, caption=f"Full video job {job.id}")
+        finally:
+            db.close()
 
     def notify_auto_post_queued(self, job_id: int) -> None:
         db = SessionLocal()

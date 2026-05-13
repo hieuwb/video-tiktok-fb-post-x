@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from app.core.config import get_settings
 from app.db import crud
@@ -6,10 +7,10 @@ from app.db.session import SessionLocal
 from app.core.utils import ensure_utc_datetime
 from app.services.caption_rewriter import CaptionRewriterService
 from app.services.profile_selector import ProfileSelectorService
+from app.services.publish_scheduler import PublishScheduler
 from app.services.runtime_settings import RuntimeSettingsService
 from app.services.telegram_notifier import TelegramNotifier
 from app.workers.celery_app import celery_app, dispatch_task
-from app.workers.tasks_publish import enqueue_publish_job
 
 
 logger = logging.getLogger(__name__)
@@ -46,6 +47,15 @@ def process_caption(job_id: int) -> None:
         next_status = "awaiting_review"
         if runtime.get_auto_post_enabled() and not runtime.get_require_approval_before_post():
             next_status = "approved"
+        # Auto-mode → gán slot publish nếu chưa có. Slot dispatcher (beat) sẽ
+        # publish khi tới giờ. Không tự enqueue ngay.
+        scheduled_at = ensure_utc_datetime(job.scheduled_publish_at)
+        if next_status == "approved" and scheduled_at is None:
+            try:
+                scheduled_at = PublishScheduler().next_slot_utc(db)
+            except Exception:
+                logger.exception("Slot scheduler failed for job %s — fallback publish now", job.id)
+
         crud.update_job(
             db,
             job,
@@ -57,10 +67,11 @@ def process_caption(job_id: int) -> None:
             ai_caption_alt_2=package["captions"]["more_engaging"],
             selected_caption=package["captions"].get(profile.style, package["captions"]["public_clean"]),
             hashtags=" ".join(package["hashtags"]),
+            scheduled_publish_at=scheduled_at,
+            approved_at=datetime.now(timezone.utc) if next_status == "approved" else job.approved_at,
         )
         if next_status == "approved":
             notifier.notify_auto_post_queued(job.id)
-            enqueue_publish_job(job.id, eta=ensure_utc_datetime(job.scheduled_publish_at))
         else:
             notifier.notify_review_ready(job.id)
     except Exception as exc:

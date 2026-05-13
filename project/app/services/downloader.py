@@ -50,20 +50,26 @@ class DownloaderService:
             else:
                 opts["cookiesfrombrowser"] = (browser_spec,)
 
-        with YoutubeDL(opts) as ydl:
-            try:
-                info = ydl.extract_info(resolved_url, download=True)
-                selected_info = self._select_primary_info(info, resolved_url)
-                enforce_download_limits(
-                    duration=selected_info.get("duration"),
-                    filesize=selected_info.get("filesize") or selected_info.get("filesize_approx"),
-                )
-                filename = self._resolve_downloaded_file_path(selected_info, ydl)
-            except DownloadError as exc:
-                raise ValueError(self._friendly_error(resolved_url, str(exc))) from exc
-            finally:
-                if generated_cookie_file:
-                    Path(generated_cookie_file).unlink(missing_ok=True)
+        try:
+            # Pre-check duration/size BEFORE tải về để khỏi đốt bandwidth/disk
+            # cho video > MAX. Nếu metadata thiếu (livestream, một số extractor)
+            # thì check lại sau khi download.
+            self._precheck_limits(resolved_url, opts)
+
+            with YoutubeDL(opts) as ydl:
+                try:
+                    info = ydl.extract_info(resolved_url, download=True)
+                    selected_info = self._select_primary_info(info, resolved_url)
+                    enforce_download_limits(
+                        duration=selected_info.get("duration"),
+                        filesize=selected_info.get("filesize") or selected_info.get("filesize_approx"),
+                    )
+                    filename = self._resolve_downloaded_file_path(selected_info, ydl)
+                except DownloadError as exc:
+                    raise ValueError(self._friendly_error(resolved_url, str(exc))) from exc
+        finally:
+            if generated_cookie_file:
+                Path(generated_cookie_file).unlink(missing_ok=True)
 
         final_path = Path(filename)
         if final_path.suffix != ".mp4":
@@ -77,6 +83,33 @@ class DownloaderService:
             description=selected_info.get("description"),
         )
 
+    def _precheck_limits(self, resolved_url: str, opts: dict) -> None:
+        probe_opts = dict(opts)
+        probe_opts["skip_download"] = True
+        probe_opts["quiet"] = True
+        probe_opts["extract_flat"] = False
+        try:
+            with YoutubeDL(probe_opts) as ydl:
+                info = ydl.extract_info(resolved_url, download=False)
+        except DownloadError as exc:
+            # Một số extractor lỗi metadata nhưng vẫn download OK → bỏ qua check.
+            return
+
+        if not info:
+            return
+        selected = self._select_primary_info(info, resolved_url)
+        duration = selected.get("duration")
+        filesize = selected.get("filesize") or selected.get("filesize_approx")
+        # enforce_download_limits raise ValueError nếu vượt — ném ra để task fail sớm.
+        enforce_download_limits(duration=duration, filesize=filesize)
+
+    _PLATFORM_DOMAINS = {
+        "youtube": ("youtube.com", "youtu.be"),
+        "tiktok": ("tiktok.com",),
+        "instagram": ("instagram.com",),
+        "facebook": ("facebook.com", "fb.watch"),
+    }
+
     def _resolve_source_url(self, url: str) -> str:
         platform = detect_platform_from_url(url)
         try:
@@ -87,8 +120,11 @@ class DownloaderService:
                 headers=self._build_request_headers(platform),
             )
             response.close()
-            if response.url:
-                return response.url
+            resolved = response.url or url
+            allowed = self._PLATFORM_DOMAINS.get(platform)
+            if allowed and not any(d in resolved for d in allowed):
+                return url
+            return resolved
         except requests.RequestException:
             pass
         return url
@@ -124,6 +160,16 @@ class DownloaderService:
             headers["Referer"] = "https://www.facebook.com/"
             if self.settings.facebook_cookie_header:
                 headers["Cookie"] = self.settings.facebook_cookie_header
+        elif platform == "tiktok":
+            headers["Referer"] = "https://www.tiktok.com/"
+            headers["User-Agent"] = (
+                "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) "
+                "AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
+            )
+            if self.settings.tiktok_cookie_header:
+                headers["Cookie"] = self.settings.tiktok_cookie_header
+        elif platform == "youtube":
+            headers["Referer"] = "https://www.youtube.com/"
 
         return headers
 
@@ -133,6 +179,8 @@ class DownloaderService:
             cookie_header = self.settings.instagram_cookie_header
         elif platform == "facebook":
             cookie_header = self.settings.facebook_cookie_header
+        elif platform == "tiktok":
+            cookie_header = self.settings.tiktok_cookie_header
 
         if not cookie_header:
             return None
